@@ -31,8 +31,9 @@ static volatile float timeout_brake_current;
 static volatile KILL_SW_MODE timeout_kill_sw_mode;
 static volatile bool has_timeout;
 static volatile bool kill_sw_active;
-static volatile bool kill_sw_ext_set = false;
-static volatile uint32_t feed_counter[MAX_THREADS_MONITOR];
+static volatile bool kill_sw_ext_set = false;  
+static volatile uint32_t feed_counter[MAX_THREADS_MONITOR];  
+static volatile bool app_monitor_enabled = false;
 
 // Threads
 static THD_WORKING_AREA(timeout_thread_wa, 256);
@@ -121,8 +122,13 @@ void timeout_set_kill_sw_ext(bool kill_set) {
 	kill_sw_ext_set = kill_set;
 }
 
-void timeout_feed_WDT(uint8_t index) {
-	++feed_counter[index];
+void timeout_feed_WDT(uint8_t index) {  
+	++feed_counter[index];  
+}  
+  
+void timeout_configure_app_monitor(bool enabled) {  
+	app_monitor_enabled = enabled;  
+	feed_counter[THREAD_APP] = 0;  
 }
 
 void timeout_configure_IWDT_slowest(void) {
@@ -252,12 +258,16 @@ static THD_FUNCTION(timeout_thread, arg) {
 			threads_ok = false;
 		}
 
-#if CAN_ENABLE
-		if(feed_counter[THREAD_CANBUS] < MIN_THREAD_ITERATIONS) {
-			threads_ok = false;
-		}
-#endif
-
+#if CAN_ENABLE  
+		if(feed_counter[THREAD_CANBUS] < MIN_THREAD_ITERATIONS) {  
+			threads_ok = false;  
+		}  
+#endif  
+  
+		if (app_monitor_enabled && feed_counter[THREAD_APP] < MIN_THREAD_ITERATIONS) {  
+			threads_ok = false;  
+		}  
+  
 		for( int i = 0; i < MAX_THREADS_MONITOR; i++) {
 			feed_counter[i] = 0;
 		}

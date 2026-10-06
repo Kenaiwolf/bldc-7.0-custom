@@ -84,6 +84,7 @@
 //#define APP_CUSTOM_TO_USE			"app_motor_heater.c"
 //#include "er/app_erockit_conf_v2.h"
 //#include "finn/app_finn_az_conf.h"
+#include "kenai/app_kenai_conf.h" //added by Kenai 20260709
 
 #include "hw.h"
 #include "mcconf_default.h"
