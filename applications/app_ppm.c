@@ -1,4 +1,6 @@
 /*
+	Modified by Kenai Custom FW for trolling motor steering
+		
 	Copyright 2016 - 2019 Benjamin Vedder	benjamin@vedder.se
 
 	This file is part of the VESC firmware.
@@ -32,22 +34,59 @@
 #include "comm_can.h"
 #include <math.h>
 
-// Settings
-#define MAX_CAN_AGE						0.1
-#define MIN_PULSES_WITHOUT_POWER		50
+// Settings  
+#define MAX_CAN_AGE						0.1  
+#define MIN_PULSES_WITHOUT_POWER		50  
+  
+// ============================================================  Kenai 20260703
+// TROLLING MOTOR SERVO — CUSTOM PARAMETERS  
+// All tunable via VESC Tool using SPEED PID tab fields (labels are wrong — see table below).  
+//  
+// VESC Tool field          | Our parameter              | Default  
+// -------------------------|----------------------------|--------  
+// Speed Kp                 | HOMING_ERPM                | 200.0  
+// Speed Ki                 | STALL_CURRENT_THR (A)      | 3.0  
+// Speed Kd                 | HOMING_BACKOFF_DEG         | 5.0  
+// Speed Kd Filter          | TRIGGER_PULSE_MS threshold | 0.9  
+// Speed Min ERPM           | STORAGE_OFFSET_DEG		 | 0.0  
+// Speed Ramp ERPM/s        | STORAGE_TOLERANCE_DEG      | 2.0  
+// Pos Angle Division       | RANGE_LIMIT_DEG (safety)   | 270.0  
+// Pos Gain Decrease Angle  | HOMING_TIMEOUT_S           | 30.0  
+// ============================================================  
+// To change: open VESC Tool -> Motor Config -> PID Controller tab,  
+// edit the Speed PID fields. Values are saved to VESC flash.  
+// ============================================================  
+  
+// State machine states  
+typedef enum {  
+	SERVO_STATE_IDLE    = 0,  // Power on, waiting for 800us->valid transition  
+	SERVO_STATE_HOMING  = 1,  // Driving to hard stop for calibration  
+	SERVO_STATE_ACTIVE  = 2,  // Normal PPM position control  
+	SERVO_STATE_STOWED  = 3,  // Driving to storage angle, then 0A  
+	SERVO_STATE_FAILSAFE = 4, // No PWM signal — 0A brake  
+} servo_state_t;
 
 // Threads
 static THD_FUNCTION(ppm_thread, arg);
-__attribute__((section(".ram4"))) static THD_WORKING_AREA(ppm_thread_wa, 512);
+static THD_WORKING_AREA(ppm_thread_wa, 1024); //changed from __attribute__((section(".ram4"))) static THD_WORKING_AREA(ppm_thread_wa, 515); Kenai 20260704 
 static thread_t *ppm_tp;
 static volatile bool ppm_rx = false;
 
 // Private functions
 static void servodec_func(void);
 
-// Private variables
-static volatile bool is_running = false;
-static volatile bool stop_now = true;
+// Private variables  
+static volatile bool is_running = false;  
+static volatile bool stop_now = true;  
+  
+// Trolling motor state machine  Kenai 20260703
+static volatile servo_state_t servo_state = SERVO_STATE_IDLE;  
+static volatile bool last_pulse_was_trigger = false; // true when last pulse was 800us  
+static volatile float hard_stop_angle = 0.0;         // Absolute angle of detected hard stop  
+static volatile float storage_angle = 0.0;           // Computed storage angle (hard_stop + offset)  
+static volatile float homing_timer = 0.0;            // Seconds spent in HOMING state  
+static volatile bool homing_completed = false;        // true after first successful hard stop detection
+static volatile bool stowed_reached = false;          // true when storage angle reached — prevents oscillation
 static volatile ppm_config config;
 static volatile int pulses_without_power = 0;
 static float input_val = 0.0;
@@ -351,33 +390,177 @@ static THD_FUNCTION(ppm_thread, arg) {
 			}
 			break;
 
-		case PPM_CTRL_TYPE_PID_POSITION_180: // -180 to 180. center ppm safestart
-		case PPM_CTRL_TYPE_PID_POSITION_360: // 0 to +360. minimum ppm safestart
-			if (fabsf(servo_val) < 0.02) {
-				pulses_without_power++;
-			}
-
-			float angle;
-			if (config.ctrl_type == PPM_CTRL_TYPE_PID_POSITION_180) {
-				angle = (servo_val * 180); // -1 <> +1
-			} else {
-				angle = (servo_val * 360); // 0 <> +1
-			}
-			utils_norm_angle(&angle);
-			if (!(pulses_without_power < MIN_PULSES_WITHOUT_POWER && config.safe_start)) {
-				// try to more intelligently safe start by waiting until 
-				// ppm "angle" is close to motor angle to go into position mode.
-				if (mc_interface_get_control_mode() != CONTROL_MODE_POS){ 	
-					if (fabsf(angle - mc_interface_get_pid_pos_now()) < 10) {
-						// enable position control.
-						mc_interface_set_pid_pos(angle);
-					}
-					break;
-				} else {
-					mc_interface_set_pid_pos(angle);
-				}
-			}
+		case PPM_CTRL_TYPE_PID_POSITION_180: // Used for trolling motor servo state machine  Kenai 20260703
+		case PPM_CTRL_TYPE_PID_POSITION_360: // (360 mode falls through to same logic)  
+		{  
+			// ============================================================  
+			// Read custom parameters from Speed PID tab (labels are wrong in VESC Tool)  
+			// ============================================================  
+			float homing_erpm        = mcconf->s_pid_kp;           // Speed Kp field  
+			float stall_thr          = mcconf->s_pid_ki;           // Speed Ki field  
+			float homing_backoff_deg = mcconf->s_pid_kd;           // Speed Kd field  
+			float storage_offset_deg = mcconf->s_pid_min_erpm;     // Speed Min ERPM field
+			float trigger_pulse_ms   = mcconf->s_pid_kd_filter;    // Speed Kd Filter field 
+			float storage_tol_deg    = mcconf->s_pid_ramp_erpms_s; // Speed Ramp field  
+			float homing_timeout_s   = mcconf->p_pid_gain_dec_angle; // Pos Gain Dec Angle field
+			float range_limit        = mcconf->p_pid_ang_div;        // Pos Angle Division field — total servo range in degrees
+  
+			// ============================================================  
+			// Detect signal type from raw pulse length  
+			// servodec_get_last_pulse_len() always returns the last received  
+			// pulse length in ms, even if it was rejected as out-of-range.  
+			// ============================================================  
+			float raw_pulse_ms = servodec_get_last_pulse_len(0);  
+			bool no_signal     = (servodec_get_time_since_update() > 2000); // True timeout  
+			bool trigger_pulse = (!no_signal) && (raw_pulse_ms < trigger_pulse_ms); // 800us  
+			bool valid_pulse   = (!no_signal) && (!trigger_pulse);  
+  
+			// ============================================================  
+			// FAILSAFE: overrides all states — no PWM cable disconnected  
+			// ============================================================  
+			if (no_signal) {  
+				servo_state = SERVO_STATE_FAILSAFE;  
+				mc_interface_set_brake_current(timeout_get_brake_current());  
+				last_pulse_was_trigger = false;  
+				break;  
+			}  
+  
+			// ============================================================  
+			// State machine transitions  
+			// ============================================================  
+			switch (servo_state) {  
+  
+			case SERVO_STATE_IDLE:  
+				// Stay in IDLE with 0A until we see 800us followed by valid PWM.  
+				// This handles both fresh power-on and VESC power-cycle while  
+				// Pixhawk is already running (Pixhawk boots with ~1500us, then  
+				// immediately sends 800us, then valid PWM — the 800us->valid  
+				// transition is the calibration trigger).  
+				mc_interface_set_current(0.0);  
+				if (trigger_pulse) {  
+					last_pulse_was_trigger = true;  
+				} else if (valid_pulse && last_pulse_was_trigger) {  
+					// Transition: 800us was seen, now valid PWM arrived -> start homing  
+					servo_state = SERVO_STATE_HOMING;  
+					homing_timer = 0.0;  
+					// Drive toward hard stop at slow speed (negative = toward stop 1)  
+					// homing_erpm is stored in Speed Kp field (label wrong in VESC Tool)  
+					mc_interface_set_pid_speed(-homing_erpm);  
+				}  
+				break;  
+  
+			case SERVO_STATE_HOMING:  
+				// Drive slowly toward hard stop. Detect stall by current threshold.  
+				// stall_thr is stored in Speed Ki field (label wrong in VESC Tool).  
+				homing_timer += dt; // dt is loop period in seconds (approx 0.001s at 1kHz)  
+				if (trigger_pulse) {   
+					// 800us received -> go to STOWED
+					stowed_reached = false;    
+					last_pulse_was_trigger = false;    
+					servo_state = SERVO_STATE_STOWED;    
+					break;    
+				}    
+				if (homing_timer > homing_timeout_s) {  
+					// Homing took too long — encoder or mechanical problem  
+					// Go back to IDLE and wait for next trigger  
+					servo_state = SERVO_STATE_IDLE;  
+					mc_interface_set_current(0.0);  
+					last_pulse_was_trigger = false;  
+					break;  
+				}  
+				if (fabsf(mc_interface_get_tot_current_directional_filtered()) > stall_thr) {  
+					// Stall detected — we are at the hard stop  
+					hard_stop_angle = mc_interface_get_pid_pos_now();    
+					homing_completed = true;  
+					// Back off slightly to release mechanical pressure  
+					// homing_backoff_deg stored in Speed Kd field  
+					float backoff_target = hard_stop_angle + homing_backoff_deg;  
+					mc_interface_set_pid_pos(backoff_target);  
+					// Set position offset so hard stop = 0 in our signed coordinate system  
+					// storage_offset_deg stored in Speed Kd Filter field  
+					// storage_angle is the absolute angle to go to when stowing  
+					storage_angle = hard_stop_angle + (range_limit / 2.0) + storage_offset_deg;  
+					servo_state = SERVO_STATE_ACTIVE;  
+				} else {  
+					mc_interface_set_pid_speed(-homing_erpm);  
+				}  
+				break;  
+  
+			case SERVO_STATE_ACTIVE:  
+				// Normal PPM position control.  
+				// servo_val is -1 to +1 (180 mode: center stick = 0).  
+				// Map to absolute angle: center stick = hard_stop + range/2.  
+				// Bug 2 fix is in run_pid_control_pos (simple subtraction).   
+				if (trigger_pulse) {   
+					// 800us during homing = abort, go to STOWED
+					stowed_reached = false;    
+					last_pulse_was_trigger = false;    
+					servo_state = SERVO_STATE_STOWED;    
+					break;    
+				}    
+				{    
+					// Map servo_val (-1..+1) to angle relative to hard stop.  
+					// Full left = hard_stop_angle, full right = hard_stop_angle + range.  
+					// range is detected during homing (not hardcoded).  
+					// For now use p_pid_ang_div as range limit safety cap.  
+					float half_range = range_limit / 2.0;  
+					// Center of range = hard_stop + half_range  
+					float center_angle = hard_stop_angle + half_range;  
+					// Map: servo_val=0 -> center, servo_val=-1 -> hard_stop, servo_val=+1 -> hard_stop+range  
+					float angle = center_angle + servo_val * half_range;  
+					// Clamp to valid range (prevents commanding past hard stops)  
+					utils_truncate_number(&angle, hard_stop_angle, hard_stop_angle + range_limit);  
+					mc_interface_set_pid_pos(angle);  
+				}  
+				break;  
+  
+			case SERVO_STATE_STOWED:  
+				// Drive to storage angle, then release (0A).  
+				// storage_tol_deg stored in Speed Ramp field.  
+				// Track trigger pulse so next valid PWM can trigger homing.  
+				if (trigger_pulse) {  
+					last_pulse_was_trigger = true;  
+				}  
+				if (valid_pulse && last_pulse_was_trigger) {  
+					// 800us -> valid PWM sequence detected — start homing  
+					servo_state = SERVO_STATE_HOMING;  
+					homing_timer = 0.0;  
+					last_pulse_was_trigger = false;  
+					stowed_reached = false;  
+					break;  
+				}  
+				if (!homing_completed) {    
+					// Homing never finished — storage_angle unknown, just release motor    
+					mc_interface_set_current(0.0);    
+				} else if (!stowed_reached) {    
+					float pos_now = mc_interface_get_pid_pos_now();    
+					if (fabsf(pos_now - storage_angle) < storage_tol_deg) {    
+						// Reached storage position — release motor (no holding torque)    
+						stowed_reached = true;    
+						mc_interface_set_current(0.0);    
+					} else {    
+						mc_interface_set_pid_pos(storage_angle);    
+					}    
+				} else {    
+					// Already at storage — keep motor released    
+					mc_interface_set_current(0.0);    
+				}  
 			break;
+  
+			case SERVO_STATE_FAILSAFE:  
+				// Signal returned — go back to IDLE and wait for 800us trigger  
+				servo_state = SERVO_STATE_IDLE;  
+				mc_interface_set_current(0.0);  
+				last_pulse_was_trigger = false;  
+				break;  
+  
+			default:  
+				servo_state = SERVO_STATE_IDLE;  
+				mc_interface_set_current(0.0);  
+				break;  
+			}  
+		}  
+		break;
 
 		default:
 			continue;

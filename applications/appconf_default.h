@@ -25,7 +25,7 @@
 #define APPCONF_CONTROLLER_ID				-1 // Controller id. -1 means it should be calculated from UUID.
 #endif
 #ifndef APPCONF_TIMEOUT_MSEC
-#define APPCONF_TIMEOUT_MSEC				1000
+#define APPCONF_TIMEOUT_MSEC				10000 //Changed by Kenai for custom FW from 1000 to 10000 20260704
 #endif
 #ifndef APPCONF_TIMEOUT_BRAKE_CURRENT
 #define APPCONF_TIMEOUT_BRAKE_CURRENT		0.0
