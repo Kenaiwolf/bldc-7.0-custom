@@ -542,17 +542,20 @@ mc_state mc_interface_get_state(void) {
 	return ret;
 }
 
-mc_control_mode mc_interface_get_control_mode(void) {
-	mc_control_mode ret = CONTROL_MODE_NONE;
-	switch (motor_now()->m_conf.motor_type) {
-	case MOTOR_TYPE_FOC:
-		ret = mcpwm_foc_control_mode();
-		break;
-
-	default:
-		break;
-	}
-	return ret;
+mc_control_mode mc_interface_get_control_mode(void) {  
+    mc_control_mode ret = CONTROL_MODE_NONE;  
+    switch (motor_now()->m_conf.motor_type) {  
+    case MOTOR_TYPE_BLDC:  
+    case MOTOR_TYPE_DC:  
+        ret = mcpwm_get_control_mode();  
+        break;  
+    case MOTOR_TYPE_FOC:  
+        ret = mcpwm_foc_control_mode();  
+        break;  
+    default:  
+        break;  
+    }  
+    return ret;  
 }
 
 void mc_interface_set_duty(float dutyCycle) {
@@ -1745,16 +1748,12 @@ void mc_interface_ignore_input_both(int time_ms) {
 }
 
 void mc_interface_release_motor_override_both(void) {
-#ifdef HW_HAS_DUAL_MOTORS
 	int motor_last = mc_interface_get_motor_thread();
 	mc_interface_select_motor_thread(1);
 	mc_interface_release_motor_override();
 	mc_interface_select_motor_thread(2);
 	mc_interface_release_motor_override();
 	mc_interface_select_motor_thread(motor_last);
-#else
-	mc_interface_release_motor_override();
-#endif
 }
 
 bool mc_interface_wait_for_motor_release_both(float timeout) {
@@ -2580,17 +2579,14 @@ static void run_timer_tasks(volatile motor_if_state_t *motor) {
 		m_motor_1.m_runtime_last = runtime;
 	}
 
-	utils_sys_lock_cnt();
 	// Decrease fault iterations
 	if (motor->m_ignore_iterations > 0) {
 		motor->m_ignore_iterations--;
-	}
-	if (motor->m_ignore_iterations == 0) {
+	} else {
 		if (!(is_motor_1 ? IS_DRV_FAULT() : IS_DRV_FAULT_2())) {
 			motor->m_fault_now = FAULT_CODE_NONE;
 		}
 	}
-	utils_sys_unlock_cnt();
 
 	if (is_motor_1 ? IS_DRV_FAULT() : IS_DRV_FAULT_2()) {
 		motor->m_drv_fault_iterations++;

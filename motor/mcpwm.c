@@ -619,6 +619,10 @@ void mcpwm_set_pid_pos(float pos) {
 	}
 }
 
+// added by kenai to fix no PWM control bug only 10 deg movment 
+mc_control_mode mcpwm_get_control_mode(void) {  
+    return control_mode;  
+}  
 /**
  * Use current control and specify a goal current to use. The sign determines
  * the direction of the torque. Absolute values less than

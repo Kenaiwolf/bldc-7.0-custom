@@ -68,7 +68,8 @@ float mcpwm_get_last_inj_adc_isr_duration(void);
 mc_rpm_dep_struct mcpwm_get_rpm_dep(void);
 bool mcpwm_is_dccal_done(void);
 void mcpwm_switch_comm_mode(mc_comm_mode next);
-
+// ADD THIS LINE right after:  
+mc_control_mode mcpwm_get_control_mode(void);
 void drv8323s_dccal_on(void);
 void drv8323s_dccal_off(void);
 

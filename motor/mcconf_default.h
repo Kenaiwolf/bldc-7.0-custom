@@ -1,4 +1,19 @@
 /*
+	____________________________________________________________________________________________________________________
+	Changed by Kenai for custom FW repurposed fields 20260704
+		 * Custom parameters stored in repurposed PID fields (labels in VESC Tool are WRONG):  
+		 *   Speed Kp          (s_pid_kp)          		= SERVO_HOMING_CURRENT (A)				  		    	Default = 0.3
+		 *	 Speed Ki          (s_pid_ki)          		= SERVO_STALL_RPM_THR (ERPM)  							Default = 45.0
+		 *   Speed Kd          (s_pid_kd)          		= SERVO_POS_DEADBAND_DEG (degrees)						Default = 5.0
+		 *   Speed Kd filter   (s_pid_kd_filter)   		= Speed Kd Filter as fraction → HOMING_MAX_RPM (e.g.
+														0.2 = 20% of max ERPM, 0=disabled)  					Default = 0.13
+		 *   Speed min ERPM    (s_pid_min_erpm)    		= STORAGE_OFFSET_DEG (degrees from hard stop center) 	Default = 0.0
+		 *   Speed ramp        (s_pid_ramp_erpms_s)		= STORAGE_TOLERANCE_DEG (degrees)  						Default = 2.0
+		 *   Pos angle div     (p_pid_ang_div)     	  	= HOMING_TIMEOUT_S (seconds)  							Default = 30.0 	!!!!CAN'T BE SET TO 0.0 !!! if so it will brick VESC if 
+																																FOC is set in same time!!! 
+		 *   Pos gain dec ang  (p_pid_gain_dec_angle) 	= Ang Div → CENTER_TRIM_DEG [REL deg],+toward stop2  	Default = 0.0
+	_____________________________________________________________________________________________________________________
+	
 	Copyright 2016 - 2019 Benjamin Vedder	benjamin@vedder.se
 
 	This file is part of the VESC firmware.
@@ -22,7 +37,7 @@
 
 // Default settings
 #ifndef MCCONF_DEFAULT_MOTOR_TYPE
-#define MCCONF_DEFAULT_MOTOR_TYPE		MOTOR_TYPE_FOC
+#define MCCONF_DEFAULT_MOTOR_TYPE		MOTOR_TYPE_DC
 #endif
 #ifndef MCCONF_PWM_MODE
 #define MCCONF_PWM_MODE					PWM_MODE_SYNCHRONOUS // Default PWM mode
@@ -139,25 +154,25 @@
 
 // Speed PID parameters
 #ifndef MCCONF_S_PID_KP
-#define MCCONF_S_PID_KP					0.004	// Proportional gain
+#define MCCONF_S_PID_KP					0.3		// Proportional gain 				Changed by Kenai 20260704 from 0.004
 #endif
 #ifndef MCCONF_S_PID_KI
-#define MCCONF_S_PID_KI					0.004	// Integral gain
+#define MCCONF_S_PID_KI					45.0	// Integral gain 					Changed by Kenai 20260704 from 0.004
 #endif
 #ifndef MCCONF_S_PID_KD
-#define MCCONF_S_PID_KD					0.0001	// Derivative gain
+#define MCCONF_S_PID_KD					5.0		// Derivative gain					Changed by Kenai 20260704 from 0.0001
 #endif
 #ifndef MCCONF_S_PID_KD_FILTER
-#define MCCONF_S_PID_KD_FILTER			0.2	// Derivative filter
+#define MCCONF_S_PID_KD_FILTER			0.13	// Derivative filter				Changed by Kenai 20260704 from 0.2
 #endif
 #ifndef MCCONF_S_PID_MIN_RPM
-#define MCCONF_S_PID_MIN_RPM			900.0	// Minimum allowed RPM
+#define MCCONF_S_PID_MIN_RPM			0.0		// Minimum allowed RPM					Changed by Kenai 20260704 from 900.0
 #endif
 #ifndef MCCONF_S_PID_ALLOW_BRAKING
 #define MCCONF_S_PID_ALLOW_BRAKING		true	// Allow braking in speed control mode
 #endif
 #ifndef MCCONF_S_PID_RAMP_ERPMS_S
-#define MCCONF_S_PID_RAMP_ERPMS_S		25000.0	// Speed input ramping, in ERPM/s
+#define MCCONF_S_PID_RAMP_ERPMS_S		2.0		// Speed input ramping, in ERPM/s	Changed by Kenai 20260704 from 25000.0
 #endif
 #ifndef MCCONF_S_PID_SPEED_SOURCE
 #define MCCONF_S_PID_SPEED_SOURCE		S_PID_SPEED_SRC_PLL
@@ -180,10 +195,10 @@
 #define MCCONF_P_PID_KD_FILTER			0.2		// Derivative filter
 #endif
 #ifndef MCCONF_P_PID_ANG_DIV
-#define MCCONF_P_PID_ANG_DIV			1.0		// Divide angle by this value
+#define MCCONF_P_PID_ANG_DIV			30.0		// HOMING_TIMEOUT_S (seconds) Default = 30.0 	!!!!CAN'T BE SET TO 0.0 !!! if so it will brick VESC if FOC is set in same time!!! 
 #endif
 #ifndef MCCONF_P_PID_GAIN_DEC_ANGLE
-#define MCCONF_P_PID_GAIN_DEC_ANGLE		0.0		// Decrease PID-gains when the error is below this value
+#define MCCONF_P_PID_GAIN_DEC_ANGLE		0.0		// Ang Div → CENTER_TRIM_DEG [REL deg],+toward stop2
 #endif
 #ifndef MCCONF_P_PID_OFFSET
 #define MCCONF_P_PID_OFFSET				0.0		// Angle offset
