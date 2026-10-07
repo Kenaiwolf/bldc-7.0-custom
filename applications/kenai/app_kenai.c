@@ -1037,7 +1037,7 @@ static void terminal_kenai_state(int argc, const char **argv) {
             }
         }
     }
-
+}
 static void terminal_kenai_deploy(int argc, const char **argv) {
     (void)argc; (void)argv;
     deploy_requested = true;
