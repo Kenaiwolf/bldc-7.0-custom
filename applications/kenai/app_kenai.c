@@ -51,9 +51,9 @@
 
 // ACTIVE-only no-hall runaway guard: high current + large persistent error + frozen encoder.
 #define NO_HALL_CURRENT_THRESH_A 3.0f
-#define NO_HALL_ERROR_THRESH_DEG 3.0f
-#define NO_HALL_POS_EPS_DEG      0.5f
-#define NO_HALL_TIME_S           0.35f
+#define NO_HALL_ERROR_THRESH_DEG 5.0f
+#define NO_HALL_POS_EPS_DEG      0.1f
+#define NO_HALL_TIME_S           0.5f
 
 // FAILSAFE reason codes — persisted to EEPROM slot KENAI_EEPROM_ADDR_FAILSAFE.
 // HW faults are stored in the same slot as (100 + mc_fault_code).
