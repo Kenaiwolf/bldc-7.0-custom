@@ -2974,9 +2974,11 @@ static THD_FUNCTION(fault_stop_thread, arg) {
 			continue;
 		}
 
-		// Some hardwares always have a DRV-fault at boot. Therefore we do not log it in the
-		// beginning to avoid confusing the user. After dccal all faults should be gone if
-		// everything is ok.
+		extern void kenai_store_last_hw_fault(mc_fault_code code); // app hook, defined in app_kenai.c  
+  
+		// Some hardwares always have a DRV-fault at boot. Therefore we do not log it in the  
+		// beginning to avoid confusing the user. After dccal all faults should be gone if  
+		// everything is ok.  
 		bool is_log_ok = (mc_interface_dccal_done() || motor->m_fault_now != FAULT_CODE_DRV);
 
 		if (is_log_ok && motor->m_fault_now == FAULT_CODE_NONE) {
@@ -3021,8 +3023,9 @@ static THD_FUNCTION(fault_stop_thread, arg) {
 			fdata.info_argn = fault_data_copy.info_argn;
 			fdata.info_args[0] = fault_data_copy.info_args[0];
 			fdata.info_args[1] = fault_data_copy.info_args[1];
-			fault_data_copy.info_str = 0;
-			fault_data_copy.info_argn = 0;
+			fault_data_copy.info_str = 0;  
+			fault_data_copy.info_argn = 0;  
+			kenai_store_last_hw_fault(fdata.fault);  
 			terminal_add_fault_data(&fdata);
 		}
 
