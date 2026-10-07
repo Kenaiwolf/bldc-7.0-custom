@@ -189,10 +189,11 @@ static void terminal_kenai_stop(int argc, const char **argv) {
     deploy_requested = false;
     stow_requested   = false;
     no_hall_fault_latched = false;  // manual override — required to clear the no-hall latch
-    failsafe_reason  = FAILSAFE_REASON_NONE;
-    servo_state      = SERVO_STATE_IDLE;
-    mc_interface_release_motor();
-    commands_printf("Kenai: STOP → IDLE, motor released.\n");
+    failsafe_reason  = FAILSAFE_REASON_NONE;    
+    servo_state      = SERVO_STATE_IDLE;    
+    mc_interface_release_motor();    
+    kenai_store_failsafe_reason_if_changed(FAILSAFE_REASON_NONE);  // clear persisted state  
+    commands_printf("Kenai: STOP → IDLE, motor released.\n FS status cleaned");
 }
 
 static void terminal_kenai_set_stops(int argc, const char **argv) {
