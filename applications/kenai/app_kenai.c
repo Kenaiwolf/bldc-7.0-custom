@@ -50,10 +50,24 @@
 #define MIN_VALID_SPAN_DEG 10.0f
 
 // ACTIVE-only no-hall runaway guard: high current + large persistent error + frozen encoder.
-#define NO_HALL_CURRENT_THRESH_A 3.0f
-#define NO_HALL_ERROR_THRESH_DEG 5.0f
-#define NO_HALL_POS_EPS_DEG      0.1f
-#define NO_HALL_TIME_S           0.5f
+// All three conditions below must hold simultaneously (AND'd) for no_hall_timer to accumulate —
+// see the check at line ~949. Loosening = making ANY of the three harder to satisfy at once.
+#define NO_HALL_CURRENT_THRESH_A 3.0f   // (A) min total current to even consider a hall fault.
+                                         // DO NOT raise — this must stay low enough to catch a
+                                         // real stall during HOMING too, where this guard is the
+                                         // primary protection against a disconnected/failed hall.
+#define NO_HALL_ERROR_THRESH_DEG 8.0f   // (deg) min |target - actual| position error. Raised from
+                                         // 5.0 -> 8.0: requires a bigger real steering discrepancy
+                                         // before suspecting hall failure. This is the main lever
+                                         // for reducing cavitation/load false-triggers — unlike
+                                         // POS_EPS_DEG, it's not limited by encoder noise floor.
+#define NO_HALL_POS_EPS_DEG      0.1f   // (deg) max encoder movement between ticks to count as
+                                         // "frozen". Left unchanged — already near its practical
+                                         // floor (encoder jitter/noise); lowering further risks the
+                                         // guard never firing even on a genuine hall failure.
+#define NO_HALL_TIME_S           0.5f   // (s) how long all 3 conditions must hold continuously.
+                                         // Left unchanged — longer dwell time = longer the actuator
+                                         // can push against a real hard stop before failsafe engages.
 
 // FAILSAFE reason codes — persisted to EEPROM slot KENAI_EEPROM_ADDR_FAILSAFE.
 // HW faults are stored in the same slot as (100 + mc_fault_code).
