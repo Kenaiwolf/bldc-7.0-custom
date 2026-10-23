@@ -22,7 +22,7 @@
 #include "conf_general.h"
 #include "utils_math.h"
 #include "utils_sys.h"
-#include "datatypes.h"  // for eeprom_var    
+#include "datatypes.h"  // for eeprom_var
 #include <string.h>    // for strcmp in terminal_kenai_debug
 
 // Custom EEPROM slot (0..127 valid, see EEPROM_VARS_CUSTOM) used to persist the
@@ -59,11 +59,11 @@
 // HW faults are stored in the same slot as (100 + mc_fault_code).
 #define FAILSAFE_REASON_NONE         0
 #define FAILSAFE_REASON_UART_TIMEOUT 1
-#define FAILSAFE_REASON_NO_HALL      2    
-  
-// Debug printf gate — default OFF. Enabled only via "kenai_debug 1" terminal cmd.  
-// RAM flag, always resets to 0 on boot — safe in field operation.  
-static volatile bool kenai_debug_verbose = false;  
+#define FAILSAFE_REASON_NO_HALL      2
+
+// Debug printf gate — default OFF. Enabled only via "kenai_debug 1" terminal cmd.
+// RAM flag, always resets to 0 on boot — safe in field operation.
+static volatile bool kenai_debug_verbose = false;
 #define KPRINTF(...) do { if (kenai_debug_verbose) commands_printf(__VA_ARGS__); } while (0)
 
 // Only write to EEPROM if value actually changed, to avoid unnecessary flash wear.
@@ -79,6 +79,12 @@ static void kenai_store_failsafe_reason_if_changed(uint8_t reason) {
 // Stores last HW fault as (100 + fault_code) in the same EEPROM slot.
 // Called from fault_stop_thread in mc_interface.c — non-static on purpose.
 void kenai_store_last_hw_fault(mc_fault_code code) {
+    // ABS_OVER_CURRENT is excluded: it fires too easily on transient end-stop/stall
+    // current spikes and clobbers the real failsafe root cause (e.g. UART timeout)
+    // in the same EEPROM slot. Do not persist it.
+    if (code == FAULT_CODE_ABS_OVER_CURRENT) {
+        return;
+    }
     kenai_store_failsafe_reason_if_changed(100 + (uint8_t)code);
 }
 
@@ -190,22 +196,22 @@ static void terminal_kenai_state(int argc, const char **argv);
 static void terminal_kenai_deploy(int argc, const char **argv);
 static void terminal_kenai_stow(int argc, const char **argv);
 static void terminal_kenai_angle(int argc, const char **argv);
-static void terminal_kenai_debug(int argc, const char **argv) {  
-    if (argc == 2) {  
-        kenai_debug_verbose = (strcmp(argv[1], "1") == 0 || strcmp(argv[1], "on") == 0);  
-    }  
-    commands_printf("Kenai: debug_verbose = %d\n", (int)kenai_debug_verbose);  
-}  
-  
+static void terminal_kenai_debug(int argc, const char **argv) {
+    if (argc == 2) {
+        kenai_debug_verbose = (strcmp(argv[1], "1") == 0 || strcmp(argv[1], "on") == 0);
+    }
+    commands_printf("Kenai: debug_verbose = %d\n", (int)kenai_debug_verbose);
+}
+
 static void terminal_kenai_stop(int argc, const char **argv) {
     (void)argc; (void)argv;
     deploy_requested = false;
     stow_requested   = false;
     no_hall_fault_latched = false;  // manual override — required to clear the no-hall latch
-    failsafe_reason  = FAILSAFE_REASON_NONE;    
-    servo_state      = SERVO_STATE_IDLE;    
-    mc_interface_release_motor();    
-    kenai_store_failsafe_reason_if_changed(FAILSAFE_REASON_NONE);  // clear persisted state  
+    failsafe_reason  = FAILSAFE_REASON_NONE;
+    servo_state      = SERVO_STATE_IDLE;
+    mc_interface_release_motor();
+    kenai_store_failsafe_reason_if_changed(FAILSAFE_REASON_NONE);  // clear persisted state
     commands_printf("Kenai: STOP → IDLE, motor released.\n FS status cleaned");
 }
 
@@ -316,16 +322,16 @@ void app_custom_start(void) {
             "",
             terminal_kenai_stop);
 
-    terminal_register_command_callback(  
-            "kenai_set_stops",  
-            "Manually set hard stop angles, skips homing (for debugging).",  
-            "kenai_set_stops [stop1_deg] [stop2_deg] for example(45 315) ",  
-            terminal_kenai_set_stops);  
-  
-    terminal_register_command_callback(  
-            "kenai_debug",  
-            "Toggle verbose debug printf from control thread.",  
-            "kenai_debug [0|1]",  
+    terminal_register_command_callback(
+            "kenai_set_stops",
+            "Manually set hard stop angles, skips homing (for debugging).",
+            "kenai_set_stops [stop1_deg] [stop2_deg] for example(45 315) ",
+            terminal_kenai_set_stops);
+
+    terminal_register_command_callback(
+            "kenai_debug",
+            "Toggle verbose debug printf from control thread.",
+            "kenai_debug [0|1]",
             terminal_kenai_debug);
 
     // No EEPROM restore — always boot to SERVO_STATE_IDLE (its default init value).
@@ -364,7 +370,7 @@ void app_custom_stop(void) {
     terminal_unregister_callback(terminal_kenai_stow);
     terminal_unregister_callback(terminal_kenai_angle);
     terminal_unregister_callback(terminal_kenai_stop);
-    terminal_unregister_callback(terminal_kenai_set_stops);  
+    terminal_unregister_callback(terminal_kenai_set_stops);
     terminal_unregister_callback(terminal_kenai_debug);
 
     stop_now = true;
@@ -609,7 +615,7 @@ static THD_FUNCTION(control_thread, arg) {
                 homing_phase_prev_pos = pos_now;
 
                 if (homing_traveled_deg > homing_max_travel_deg && homing_phase != HOMING_PHASE_RETURN_TO_START) {
-                    KPRINTF("Kenai: HOMING ABORT — traveled %.1f deg, returning to start",  
+                    KPRINTF("Kenai: HOMING ABORT — traveled %.1f deg, returning to start",
                                     (double)homing_traveled_deg);
                     mc_interface_set_current(0.0f);
                     // Latch direction/distance BEFORE overwriting homing_phase — see timeout branch above.
@@ -659,10 +665,10 @@ static THD_FUNCTION(control_thread, arg) {
                             if (movement >= 5.0f) {
                                 encoder_inverted = (utils_angle_difference(stop1_angle, pos_at_homing_start) < 0.0f);
                                 enc_dir_detected = true;
-                                KPRINTF("Kenai: Stop1=%.1f enc_inverted=%d (from stop1 move %.1f deg)",  
+                                KPRINTF("Kenai: Stop1=%.1f enc_inverted=%d (from stop1 move %.1f deg)",
                                         (double)stop1_angle, (int)encoder_inverted, (double)movement);
                             } else {
-                                KPRINTF("Kenai: Stop1=%.1f moved only %.1f deg — deferring direction detect to stop2",  
+                                KPRINTF("Kenai: Stop1=%.1f moved only %.1f deg — deferring direction detect to stop2",
                                         (double)stop1_angle, (double)movement);
                             }
                         }
@@ -710,7 +716,7 @@ static THD_FUNCTION(control_thread, arg) {
                         if (!enc_dir_detected) {
                             encoder_inverted = (utils_angle_difference(stop2_angle, stop1_angle) > 0.0f);
                             enc_dir_detected = true;
-                            KPRINTF("Kenai: enc_inverted=%d (from stop2 move — motor started at stop1)",  
+                            KPRINTF("Kenai: enc_inverted=%d (from stop2 move — motor started at stop1)",
                                     (int)encoder_inverted);
                         }
 
@@ -737,7 +743,7 @@ static THD_FUNCTION(control_thread, arg) {
                         // UART signal alone (MSG_GET_STATE/MSG_SET_ANGLE) must NOT clear this — the
                         // fault is the encoder, not comms; only kenai_stop clears no_hall_fault_latched.
                         if (span < MIN_VALID_SPAN_DEG) {
-                            KPRINTF("Kenai: HOMING INVALID — span %.1f deg (<%.1f) — no encoder motion — FAILSAFE",  
+                            KPRINTF("Kenai: HOMING INVALID — span %.1f deg (<%.1f) — no encoder motion — FAILSAFE",
                                     (double)span, (double)MIN_VALID_SPAN_DEG);
                             mc_interface_release_motor();
                             no_hall_fault_latched = true;
@@ -768,7 +774,7 @@ static THD_FUNCTION(control_thread, arg) {
                         if (storage_angle >= 360.0f) storage_angle = 0.0f;  // guard exact-360 edge case
                         homing_completed  = true;
 
-                        KPRINTF("Kenai: Stop2=%.1f  Center=%.1f  Storage=%.1f — ACTIVE",  
+                        KPRINTF("Kenai: Stop2=%.1f  Center=%.1f  Storage=%.1f — ACTIVE",
                                 (double)stop2_angle, (double)center_angle, (double)storage_angle);
 
                         in_deadband       = false;
@@ -806,7 +812,7 @@ static THD_FUNCTION(control_thread, arg) {
                     // phase, see top of block), so it's correct past 180deg/multiple wraps, unlike
                     // utils_angle_difference() on far-apart absolute angles (shortest-path only, <=180deg).
                     if (homing_traveled_deg >= homing_return_distance_deg) {
-                        KPRINTF("Kenai: Returned to start (%.1f/%.1f deg) — IDLE",  
+                        KPRINTF("Kenai: Returned to start (%.1f/%.1f deg) — IDLE",
                                 (double)homing_traveled_deg, (double)homing_return_distance_deg);
                         mc_interface_release_motor();
                         deploy_requested = false;
