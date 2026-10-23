@@ -61,29 +61,59 @@
 #define FAILSAFE_REASON_UART_TIMEOUT 1
 #define FAILSAFE_REASON_NO_HALL      2
 
+// EEPROM word layout: bits [0:7] = code (0/1/2 = FAILSAFE_REASON_*, >=100 = 100+mc_fault_code),
+// bits [8:31] = seconds-since-boot at the time this code was written (24-bit, ~194 days range).
+// Packed into the existing 32-bit slot — no extra EEPROM address, no extra flash write/incident.
+#define KENAI_FAILSAFE_CODE_MASK  0xFFu
+#define KENAI_FAILSAFE_TIME_SHIFT 8u
+
+// Any HW/failsafe code that fires within this many seconds of boot is assumed to be a
+// power-up transient (cap charging, ADC offset not yet settled, DRV glitch, etc.) and is
+// NOT persisted — it would otherwise clobber the real root cause of a previous incident.
+// FAULT_CODE_BOOTING_FROM_WATCHDOG_RESET is the sole exception: it is itself only ever
+// detected in this same early window and is the one signal we actually want to survive
+// a reboot (it tells us a frozen thread caused an IWDG reset).
+#define KENAI_BOOT_FAULT_SUPPRESS_S 30.0f
+
+// Set once at the top of app_custom_start(). Used to timestamp stored faults and to
+// gate the boot-suppress window above.
+static systime_t kenai_boot_time;
+
 // Debug printf gate — default OFF. Enabled only via "kenai_debug 1" terminal cmd.
 // RAM flag, always resets to 0 on boot — safe in field operation.
 static volatile bool kenai_debug_verbose = false;
 #define KPRINTF(...) do { if (kenai_debug_verbose) commands_printf(__VA_ARGS__); } while (0)
 
-// Only write to EEPROM if value actually changed, to avoid unnecessary flash wear.
+// Only write to EEPROM if the code actually changed, to avoid unnecessary flash wear.
+// Packs the current seconds-since-boot into the upper bits alongside the code.
 static void kenai_store_failsafe_reason_if_changed(uint8_t reason) {
     eeprom_var v_old;
     bool have_old = conf_general_read_eeprom_var_custom(&v_old, KENAI_EEPROM_ADDR_FAILSAFE);
-    if (!have_old || v_old.as_u32 != (uint32_t)reason) {
-        eeprom_var v_new; v_new.as_u32 = (uint32_t)reason;
+    uint8_t old_code = have_old ? (uint8_t)(v_old.as_u32 & KENAI_FAILSAFE_CODE_MASK) : 0xFFu;
+    if (!have_old || old_code != reason) {
+        uint32_t secs_since_boot = (uint32_t)(ST2S(chVTTimeElapsedSinceX(kenai_boot_time)));
+        eeprom_var v_new;
+        v_new.as_u32 = ((uint32_t)reason & KENAI_FAILSAFE_CODE_MASK) |
+                       (secs_since_boot << KENAI_FAILSAFE_TIME_SHIFT);
         conf_general_store_eeprom_var_custom(&v_new, KENAI_EEPROM_ADDR_FAILSAFE);
     }
 }
 
 // Stores last HW fault as (100 + fault_code) in the same EEPROM slot.
 // Called from fault_stop_thread in mc_interface.c — non-static on purpose.
+//
+// Faults within KENAI_BOOT_FAULT_SUPPRESS_S of boot are treated as power-up transients
+// and are not persisted, since they would clobber the real root cause of a prior incident.
+// This supersedes the old ABS_OVER_CURRENT-only exclusion (commit c8546183): that code
+// is now just one instance of the broader "boot transient" category covered here.
+// FAULT_CODE_BOOTING_FROM_WATCHDOG_RESET is exempt, since it is the one fault we want to
+// survive specifically because it always occurs in this same early window.
 void kenai_store_last_hw_fault(mc_fault_code code) {
-    // ABS_OVER_CURRENT is excluded: it fires too easily on transient end-stop/stall
-    // current spikes and clobbers the real failsafe root cause (e.g. UART timeout)
-    // in the same EEPROM slot. Do not persist it.
-    if (code == FAULT_CODE_ABS_OVER_CURRENT) {
-        return;
+    if (code != FAULT_CODE_BOOTING_FROM_WATCHDOG_RESET) {
+        float elapsed_s = (float)ST2MS(chVTTimeElapsedSinceX(kenai_boot_time)) / 1000.0f;
+        if (elapsed_s < KENAI_BOOT_FAULT_SUPPRESS_S) {
+            return;
+        }
     }
     kenai_store_failsafe_reason_if_changed(100 + (uint8_t)code);
 }
@@ -337,7 +367,8 @@ void app_custom_start(void) {
     // No EEPROM restore — always boot to SERVO_STATE_IDLE (its default init value).
     // Encoder is incremental (hall A/B), so nothing meaningful survives a power cycle
     // anyway; a fresh deploy/homing is always required after boot regardless.
-    last_cmd_time = chVTGetSystemTimeX();
+    kenai_boot_time = chVTGetSystemTimeX();
+    last_cmd_time = kenai_boot_time;
     cmd_received_ever = false;
 
     stop_now = false;
@@ -347,14 +378,19 @@ void app_custom_start(void) {
     {
         eeprom_var v;
         if (conf_general_read_eeprom_var_custom(&v, KENAI_EEPROM_ADDR_FAILSAFE)) {
-            if (v.as_u32 >= 100) {
-                commands_printf("Kenai: last fault before this boot: %s",
-                        mc_interface_fault_to_string((mc_fault_code)(v.as_u32 - 100)));
+            uint8_t stored_code = (uint8_t)(v.as_u32 & KENAI_FAILSAFE_CODE_MASK);
+            uint32_t stored_secs = v.as_u32 >> KENAI_FAILSAFE_TIME_SHIFT;
+            if (stored_code >= 100) {
+                commands_printf("Kenai: last fault before previous boot: %s (occurred %lu s after that boot)",
+                        mc_interface_fault_to_string((mc_fault_code)(stored_code - 100)),
+                        (unsigned long)stored_secs);
             } else {
-                commands_printf("Kenai: last saved failsafe_reason before this boot = %d", (int)v.as_u32);
+                commands_printf("Kenai: last saved failsafe_reason before previous boot = %d (occurred %lu s after that boot)",
+                        (int)stored_code, (unsigned long)stored_secs);
             }
         }
     }
+
 
     chThdCreateStatic(control_thread_wa, sizeof(control_thread_wa),
             NORMALPRIO, control_thread, NULL);
@@ -1056,11 +1092,15 @@ static void terminal_kenai_state(int argc, const char **argv) {
     {
         eeprom_var v;
         if (conf_general_read_eeprom_var_custom(&v, KENAI_EEPROM_ADDR_FAILSAFE)) {
-            if (v.as_u32 >= 100) {
-                commands_printf("  last fault: %s",
-                        mc_interface_fault_to_string((mc_fault_code)(v.as_u32 - 100)));
+            uint8_t stored_code = (uint8_t)(v.as_u32 & KENAI_FAILSAFE_CODE_MASK);
+            uint32_t stored_secs = v.as_u32 >> KENAI_FAILSAFE_TIME_SHIFT;
+            if (stored_code >= 100) {
+                commands_printf("  last fault: %s (at %lu s after boot)",
+                        mc_interface_fault_to_string((mc_fault_code)(stored_code - 100)),
+                        (unsigned long)stored_secs);
             } else {
-                commands_printf("  fs_reason(0=NONE, 1=UART_TIMEOUT, 2=NO_HALL): %d", (int)v.as_u32);
+                commands_printf("  fs_reason(0=NONE, 1=UART_TIMEOUT, 2=NO_HALL): %d (at %lu s after boot)",
+                        (int)stored_code, (unsigned long)stored_secs);
             }
         }
     }
