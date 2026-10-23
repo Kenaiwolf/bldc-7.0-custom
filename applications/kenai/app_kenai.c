@@ -965,7 +965,13 @@ static THD_FUNCTION(control_thread, arg) {
                     active_prev_pos   = 0.0f;
                     no_hall_timer     = 0.0f;
                     mc_interface_release_motor();
-                    kenai_store_failsafe_reason_if_changed(failsafe_reason);
+                    // Defer the EEPROM write (can block control_thread for up to 3s inside
+                    // mc_interface_wait_for_motor_release_both() + a chSysLock'd flash erase/write,
+                    // see conf_general.c store_eeprom_var()) out of this hot path. A stalled
+                    // control_thread here stops timeout_feed_WDT(THREAD_APP) and can trigger an
+                    // IWDG reset. Just latch a RAM flag; the actual write happens later, outside
+                    // the critical window, in the FAILSAFE case body below.
+                    pending_failsafe_reason = failsafe_reason;
                     break;
                 }
 
@@ -1048,6 +1054,14 @@ static THD_FUNCTION(control_thread, arg) {
         case SERVO_STATE_FAILSAFE:
             timeout_reset();
 			mc_interface_release_motor();
+            // Perform the deferred EEPROM write here — one tick after the FAILSAFE
+            // transition, after the UART reply for this cycle has already been queued,
+            // so the blocking write doesn't collide with sending the state change to Pixhawk.
+            if (pending_failsafe_reason != FAILSAFE_REASON_NONE) {
+                uint8_t _reason_to_store = pending_failsafe_reason;
+                pending_failsafe_reason = FAILSAFE_REASON_NONE;
+                kenai_store_failsafe_reason_if_changed(_reason_to_store);
+            }
 
             // Signal restored → back to IDLE — but NOT if latched by the no-hall guard/homing-span
             // check, since that fault is the encoder, not comms; only kenai_stop clears the latch.
