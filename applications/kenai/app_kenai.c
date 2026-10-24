@@ -129,6 +129,20 @@ void kenai_store_last_hw_fault(mc_fault_code code) {
             return;
         }
     }
+
+    // UNDER_VOLTAGE fires on every normal power-down (caps discharging), not just on a
+    // genuine incident, so it must never clobber an already-latched real FAILSAFE/fault
+    // reason from this same power cycle. Only persist it if the slot is still "clean"
+    // (FAILSAFE_REASON_NONE) — any other FS reasons/faults are allowed to overwrite freely.
+    if (code == FAULT_CODE_UNDER_VOLTAGE) {
+        eeprom_var v_old;
+        bool have_old = conf_general_read_eeprom_var_custom(&v_old, KENAI_EEPROM_ADDR_FAILSAFE);
+        uint8_t old_code = have_old ? (uint8_t)(v_old.as_u32 & KENAI_FAILSAFE_CODE_MASK) : 0xFFu;
+        if (have_old && old_code != FAILSAFE_REASON_NONE) {
+            return;
+        }
+    }
+
     kenai_store_failsafe_reason_if_changed(100 + (uint8_t)code);
 }
 
