@@ -209,9 +209,10 @@ static volatile bool stow_requested    = false;
 static volatile bool stowed_reached = false;
 static volatile bool in_deadband = false;
 static volatile bool homing_completed  = false;
-static volatile bool no_hall_fault_latched = false;  // latched FAILSAFE cause — cleared only by kenai_stop
+static volatile bool no_hall_fault_latched = false;  // latched FAILSAFE cause
 static volatile uint8_t failsafe_reason = FAILSAFE_REASON_NONE;  // last FAILSAFE cause, reported via MSG_GET_STATE
 static float no_hall_timer = 0.0f;  // ACTIVE-only accumulator for no-hall runaway guard
+static float no_hall_recover_timer = 0.0f;  // FAILSAFE-only accumulator for no-hall latch auto-clear
 
 static volatile float homing_timer = 0.0f;
 static volatile float stall_timer  = 0.0f;
@@ -251,7 +252,7 @@ static void terminal_kenai_stop(int argc, const char **argv) {
     (void)argc; (void)argv;
     deploy_requested = false;
     stow_requested   = false;
-    no_hall_fault_latched = false;  // manual override — required to clear the no-hall latch
+    no_hall_fault_latched = false;  // clears automaticaly after 5 sec
     failsafe_reason  = FAILSAFE_REASON_NONE;
     servo_state      = SERVO_STATE_IDLE;
     mc_interface_release_motor();
@@ -791,7 +792,6 @@ static THD_FUNCTION(control_thread, arg) {
                         // Invalid span (hall disconnected/frozen encoder => stop1≈stop2≈start) —
                         // latch FAILSAFE instead of publishing a bogus center/entering ACTIVE. A live
                         // UART signal alone (MSG_GET_STATE/MSG_SET_ANGLE) must NOT clear this — the
-                        // fault is the encoder, not comms; only kenai_stop clears no_hall_fault_latched.
                         if (span < MIN_VALID_SPAN_DEG) {
                             KPRINTF("Kenai: HOMING INVALID — span %.1f deg (<%.1f) — no encoder motion — FAILSAFE",
                                     (double)span, (double)MIN_VALID_SPAN_DEG);
@@ -1077,12 +1077,28 @@ static THD_FUNCTION(control_thread, arg) {
                 kenai_store_failsafe_reason_if_changed(_reason_to_store);
             }
 
-            // Signal restored → back to IDLE — but NOT if latched by the no-hall guard/homing-span
-            // check, since that fault is the encoder, not comms; only kenai_stop clears the latch.
+            // Signal restored → back to IDLE — not latched by comms loss.
             if (!no_signal && !no_hall_fault_latched) {
-                KPRINTF("Kenai: Signal restored — IDLE");
+                commands_printf("Kenai: Signal restored — IDLE");
                 failsafe_reason = FAILSAFE_REASON_NONE;
                 servo_state = SERVO_STATE_IDLE;
+            }
+
+            // NO-HALL latch auto-clears after a grace period instead of requiring kenai_stop —
+            // Pixhawk already detects/logs/disarms on its own offline watchdog (~3s) during this
+            // window, and the exact cause remains recoverable post-mortem via EEPROM fs_reason,
+            // so a permanently stuck state adds outage time without added diagnostic value.
+            if (no_hall_fault_latched) {
+                no_hall_recover_timer += (1.0f / 200.0f); // this loop runs at 200 Hz (5ms sleep)
+                if (no_hall_recover_timer > 5.0f) {
+                    no_hall_fault_latched = false;
+                    no_hall_recover_timer = 0.0f;
+                    commands_printf("Kenai: NO-HALL latch auto-cleared after grace period — IDLE");
+                    failsafe_reason = FAILSAFE_REASON_NONE;
+                    servo_state = SERVO_STATE_IDLE;
+                }
+            } else {
+                no_hall_recover_timer = 0.0f;
             }
             break;
 
@@ -1115,7 +1131,7 @@ static void terminal_kenai_state(int argc, const char **argv) {
     commands_printf("  enc_inverted: %d",        (int)encoder_inverted);
     commands_printf("  no_hall_flt : %d",        (int)no_hall_fault_latched);
     // fs_reason legend: 0=NONE (no failsafe), 1=UART_TIMEOUT (comms lost, auto-recovers on signal),
-    //                    2=NO_HALL (latched HW/encoder fault — requires kenai_stop to clear)
+    //                    2=NO_HALL (latched HW/encoder fault)
     commands_printf("  fs_reason   : %d",        (int)failsafe_reason);
     {
         eeprom_var v;
