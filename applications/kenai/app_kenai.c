@@ -209,8 +209,9 @@ static volatile bool stow_requested    = false;
 static volatile bool stowed_reached = false;
 static volatile bool in_deadband = false;
 static volatile bool homing_completed  = false;
-static volatile bool no_hall_fault_latched = false;  // latched FAILSAFE cause
+static volatile bool no_hall_fault_latched = false;  // latched FAILSAFE cause — auto-clears after grace period (see FAILSAFE case)
 static volatile uint8_t failsafe_reason = FAILSAFE_REASON_NONE;  // last FAILSAFE cause, reported via MSG_GET_STATE
+static volatile uint8_t pending_failsafe_reason = FAILSAFE_REASON_NONE;  // deferred EEPROM-write payload — set in hot path, written one tick later in FAILSAFE case body
 static float no_hall_timer = 0.0f;  // ACTIVE-only accumulator for no-hall runaway guard
 static float no_hall_recover_timer = 0.0f;  // FAILSAFE-only accumulator for no-hall latch auto-clear
 
