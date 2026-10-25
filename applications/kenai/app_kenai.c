@@ -130,15 +130,13 @@ void kenai_store_last_hw_fault(mc_fault_code code) {
         }
     }
 
-    // UNDER_VOLTAGE fires on every normal power-down (caps discharging), not just on a
-    // genuine incident, so it must never clobber an already-latched real FAILSAFE/fault
-    // reason from this same power cycle. Only persist it if the slot is still "clean"
-    // (FAILSAFE_REASON_NONE) — any other FS reasons/faults are allowed to overwrite freely.
+    // UNDER_VOLTAGE fires on every normal power-down (caps discharging), not during real
+    // operation. Only persist it if the unit was actually driving (ACTIVE) or still homing
+    // at the moment power dropped — a routine shutdown from STOWED/IDLE must write nothing,
+    // otherwise this slot can never be cleared via terminal: the next power-off would just
+    // re-write UNDER_VOLTAGE again even though nothing went wrong.
     if (code == FAULT_CODE_UNDER_VOLTAGE) {
-        eeprom_var v_old;
-        bool have_old = conf_general_read_eeprom_var_custom(&v_old, KENAI_EEPROM_ADDR_FAILSAFE);
-        uint8_t old_code = have_old ? (uint8_t)(v_old.as_u32 & KENAI_FAILSAFE_CODE_MASK) : 0xFFu;
-        if (have_old && old_code != FAILSAFE_REASON_NONE) {
+        if (servo_state != SERVO_STATE_ACTIVE && servo_state != SERVO_STATE_HOMING) {
             return;
         }
     }
