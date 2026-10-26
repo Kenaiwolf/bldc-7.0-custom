@@ -111,6 +111,8 @@ typedef enum {
     HOMING_PHASE_RETURN_TO_START  = 3,
 } homing_phase_t;
 
+static volatile servo_state_t  servo_state  = SERVO_STATE_IDLE;
+static volatile homing_phase_t homing_phase = HOMING_PHASE_FIND_STOP1;
 
 // Debug printf gate — default OFF. Enabled only via "kenai_debug 1" terminal cmd.
 // RAM flag, always resets to 0 on boot — safe in field operation.
@@ -197,9 +199,6 @@ static THD_WORKING_AREA(control_thread_wa, 2048);  // was 1024, bumped after bri
 // ============================================================
 static volatile bool stop_now = true;
 static volatile bool control_is_running = false;
-
-static volatile servo_state_t  servo_state  = SERVO_STATE_IDLE;
-static volatile homing_phase_t homing_phase = HOMING_PHASE_FIND_STOP1;
 
 static volatile float stop1_angle      = 0.0f;  // [ENC] positive hard stop (higher encoder value)
 static volatile float stop2_angle      = 0.0f;  // [ENC] negative hard stop (lower encoder value)
