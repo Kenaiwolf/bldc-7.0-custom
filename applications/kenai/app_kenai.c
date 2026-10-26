@@ -93,6 +93,25 @@
 // gate the boot-suppress window above.
 static systime_t kenai_boot_time;
 
+// ============================================================
+// State machine types
+// ============================================================
+typedef enum {
+    SERVO_STATE_IDLE     = 0,
+    SERVO_STATE_HOMING   = 1,
+    SERVO_STATE_ACTIVE   = 2,
+    SERVO_STATE_STOWED   = 3,
+    SERVO_STATE_FAILSAFE = 4,
+} servo_state_t;
+
+typedef enum {
+    HOMING_PHASE_FIND_STOP1       = 0,
+    HOMING_PHASE_FIND_STOP2       = 1,
+    // 2 removed — was HOMING_PHASE_DRIVE_TO_CENTER, no longer used
+    HOMING_PHASE_RETURN_TO_START  = 3,
+} homing_phase_t;
+
+
 // Debug printf gate — default OFF. Enabled only via "kenai_debug 1" terminal cmd.
 // RAM flag, always resets to 0 on boot — safe in field operation.
 static volatile bool kenai_debug_verbose = false;
@@ -166,24 +185,6 @@ void kenai_store_last_hw_fault(mc_fault_code code) {
 #define MSG_STOW        0x02    // Pixhawk → VESC: go to storage position
 #define MSG_SET_ANGLE   0x03    // Pixhawk → VESC: set target angle (float32, deg from center)
 #define MSG_GET_STATE   0x04    // Pixhawk → VESC: query state → reply
-
-// ============================================================
-// State machine types
-// ============================================================
-typedef enum {
-    SERVO_STATE_IDLE     = 0,
-    SERVO_STATE_HOMING   = 1,
-    SERVO_STATE_ACTIVE   = 2,
-    SERVO_STATE_STOWED   = 3,
-    SERVO_STATE_FAILSAFE = 4,
-} servo_state_t;
-
-typedef enum {
-    HOMING_PHASE_FIND_STOP1       = 0,
-    HOMING_PHASE_FIND_STOP2       = 1,
-    // 2 removed — was HOMING_PHASE_DRIVE_TO_CENTER, no longer used
-    HOMING_PHASE_RETURN_TO_START  = 3,
-} homing_phase_t;
 
 // ============================================================
 // Thread
