@@ -1,3 +1,4 @@
+# My account will be suspended tomorrow because I refuse to give GIT my personal information so this REPO. is abandon because of GIThub. I HAVE NO ACCESS TO THIS REPO ANYMORE!
 # VESC firmware
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
